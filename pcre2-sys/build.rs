@@ -8,7 +8,8 @@ use std::{env, fs};
 
 use bindgen::CargoCallbacks;
 
-const FILES_S: &'static [&'static str] = &[
+// Files that PCRE2 needs to compile.
+const FILES: &'static [&'static str] = &[
     "pcre2posix.c",
     "pcre2_auto_possess.c",
     "pcre2_compile.c",
@@ -20,8 +21,6 @@ const FILES_S: &'static [&'static str] = &[
     "pcre2_extuni.c",
     "pcre2_find_bracket.c",
     "pcre2_jit_compile.c",
-    // "pcre2_jit_match.c",
-    // "pcre2_jit_misc.c",
     "pcre2_maketables.c",
     "pcre2_match.c",
     "pcre2_match_data.c",
@@ -38,80 +37,25 @@ const FILES_S: &'static [&'static str] = &[
     "pcre2_ucd.c",
     "pcre2_valid_utf.c",
     "pcre2_xclass.c",
-];
-
-const _FILES: &'static [&'static str] = &[
-    "pcre2_auto_possess.c",
-    "pcre2_compile.c",
-    "pcre2_config.c",
-    "pcre2_context.c",
-    "pcre2_convert.c",
-    "pcre2_dfa_match.c",
-    "pcre2_error.c",
-    "pcre2_extuni.c",
-    "pcre2_find_bracket.c",
-    "pcre2_jit_compile.c",
-    "pcre2_maketables.c",
-    "pcre2_match.c",
-    "pcre2_match_data.c",
-    "pcre2_newline.c",
-    "pcre2_ord2utf.c",
-    "pcre2_pattern_info.c",
-    "pcre2_script_run.c",
-    "pcre2_serialize.c",
-    "pcre2_string_utils.c",
-    "pcre2_study.c",
-    "pcre2_substitute.c",
-    "pcre2_substring.c",
-    "pcre2_tables.c",
-    "pcre2_ucd.c",
-    "pcre2_valid_utf.c",
-    "pcre2_xclass.c",
-];
-
-// Files that PCRE2 needs to compile.
-const FILES: &'static [&'static str] = &[
-    "pcre2_auto_possess.c",
-    "pcre2_compile.c",
-    "pcre2_config.c",
-    "pcre2_context.c",
-    "pcre2_convert.c",
-    "pcre2_dfa_match.c",
-    "pcre2_error.c",
-    "pcre2_extuni.c",
-    "pcre2_find_bracket.c",
-    "pcre2_jit_compile.c",
-    "pcre2_maketables.c",
-    "pcre2_match.c",
-    "pcre2_match_data.c",
-    "pcre2_newline.c",
-    "pcre2_ord2utf.c",
-    "pcre2_pattern_info.c",
-    "pcre2_script_run.c",
-    "pcre2_serialize.c",
-    "pcre2_string_utils.c",
-    "pcre2_study.c",
-    "pcre2_substitute.c",
-    "pcre2_substring.c",
-    "pcre2_tables.c",
-    "pcre2_ucd.c",
-    "pcre2_valid_utf.c",
-    "pcre2_xclass.c",
+    "pcre2_chkdint.c", // recent addition missed in NON-AUTOTOOLS list
+                       // "pcre2_jit_match.c",
+                       // "pcre2_jit_misc.c",
 ];
 
 fn main() {
     println!("cargo:rerun-if-env-changed=PCRE2_SYS_STATIC");
 
+    // link search path
     println!("cargo:rustc-link-search=pcre2-sys/target/");
 
     let target = env::var("TARGET").unwrap();
     let out = PathBuf::from("./target");
 
     // Don't link to a system library if we want a static build.
-    // let want_static = pcre2_sys_static().unwrap_or(target.contains("musl"));
-    // if !want_static && pkg_config::probe_library("libpcre2-8").is_ok() {
-    //     return;
-    // }
+    let want_static = use_pcre2_sys_static().unwrap_or(target.contains("musl"));
+    if !want_static && pkg_config::probe_library("libpcre2-8").is_ok() {
+        return;
+    }
 
     // make sure our pcre2 submodule has been loaded.
     if has_git() && !Path::new("pcre2/.git").exists() {
@@ -146,8 +90,7 @@ fn main() {
         builder.define("HAVE_WINDOWS_H", "1");
     }
 
-    // Copy PCRE2 headers. Typically, `./configure` would do this for us
-    // automatically, but since we're compiling by hand, we do it ourselves.
+    // Copy PCRE2 headers manually.
     let include = out.join("include");
     fs::create_dir_all(&include).unwrap();
     fs::copy("pcre2/src/config.h.generic", include.join("config.h")).unwrap();
@@ -156,8 +99,6 @@ fn main() {
     // Same deal for chartables. Just use the default.
     let src = out.join("src");
     fs::create_dir_all(&src).unwrap();
-    // fs::copy("pcre2/src/config.h.generic", src.join("config.h")).unwrap();
-    // fs::copy("pcre2/src/pcre2.h.generic", src.join("pcre2.h")).unwrap();
     fs::copy(
         "pcre2/src/pcre2_chartables.c.dist",
         src.join("pcre2_chartables.c"),
@@ -188,7 +129,7 @@ fn has_git() -> bool {
         .unwrap_or(false)
 }
 
-fn pcre2_sys_static() -> Option<bool> {
+fn use_pcre2_sys_static() -> Option<bool> {
     match env::var("PCRE2_SYS_STATIC") {
         Err(_) => None,
         Ok(s) => {
@@ -205,13 +146,11 @@ fn pcre2_sys_static() -> Option<bool> {
 
 fn binding() {
     let lib_dir = PathBuf::from("./target");
-    // let lib_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
 
+    // head file path need to binding
     let header_path = lib_dir.join("include/pcre2.h");
     let header_path_str = header_path.to_str().expect("invalid head path");
-    // The bindgen::Builder is the main entry point
-    // to bindgen, and lets you build up options for
-    // the resulting bindings.
+   
     let bindings = bindgen::Builder::default()
         // The input header we would like to generate
         // bindings for.
