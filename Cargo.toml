@@ -10,3 +10,4 @@ members = ["pcre2-sys"]
 [dependencies]
 pcre2-sys = { path = "./pcre2-sys" }
 libc = "0.2"
+anyhow = "1.0.70"

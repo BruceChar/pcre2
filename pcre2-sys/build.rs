@@ -21,6 +21,8 @@ const FILES: &'static [&'static str] = &[
     "pcre2_extuni.c",
     "pcre2_find_bracket.c",
     "pcre2_jit_compile.c",
+    // "pcre2_jit_match.c", // only for sljit
+    // "pcre2_jit_misc.c",
     "pcre2_maketables.c",
     "pcre2_match.c",
     "pcre2_match_data.c",
@@ -37,9 +39,7 @@ const FILES: &'static [&'static str] = &[
     "pcre2_ucd.c",
     "pcre2_valid_utf.c",
     "pcre2_xclass.c",
-    "pcre2_chkdint.c", // recent addition missed in NON-AUTOTOOLS list
-                       // "pcre2_jit_match.c",
-                       // "pcre2_jit_misc.c",
+    "pcre2_chkdint.c", // recent addition, missed in NON-AUTOTOOLS list and release@10.42
 ];
 
 fn main() {
@@ -50,6 +50,8 @@ fn main() {
 
     let target = env::var("TARGET").unwrap();
     let out = PathBuf::from("./target");
+    let include_path = out.join("include");
+    let src_path = out.join("src");
 
     // Don't link to a system library if we want a static build.
     let want_static = use_pcre2_sys_static().unwrap_or(target.contains("musl"));
@@ -67,7 +69,7 @@ fn main() {
 
     let mut builder = cc::Build::new();
     builder
-        .out_dir("./target")
+        .out_dir("target")
         .define("PCRE2_CODE_UNIT_WIDTH", "8")
         .define("HAVE_STDLIB_H", "1")
         .define("HAVE_MEMMOVE", "1")
@@ -91,24 +93,23 @@ fn main() {
     }
 
     // Copy PCRE2 headers manually.
-    let include = out.join("include");
-    fs::create_dir_all(&include).unwrap();
-    fs::copy("pcre2/src/config.h.generic", include.join("config.h")).unwrap();
-    fs::copy("pcre2/src/pcre2.h.generic", include.join("pcre2.h")).unwrap();
+    fs::create_dir_all(&include_path).unwrap();
+    fs::copy("pcre2/src/config.h.generic", include_path.join("config.h")).unwrap();
+    fs::copy("pcre2/src/pcre2.h.generic", include_path.join("pcre2.h")).unwrap();
 
     // Same deal for chartables. Just use the default.
-    let src = out.join("src");
-    fs::create_dir_all(&src).unwrap();
+    fs::create_dir_all(&src_path).unwrap();
     fs::copy(
         "pcre2/src/pcre2_chartables.c.dist",
-        src.join("pcre2_chartables.c"),
-    ).unwrap();
+        src_path.join("pcre2_chartables.c"),
+    )
+    .unwrap();
 
     // Build everything.
     builder
         .include("pcre2/src")
-        .include(&include)
-        .file(src.join("pcre2_chartables.c"));
+        .include(&include_path)
+        .file(src_path.join("pcre2_chartables.c"));
     for file in FILES {
         builder.file(Path::new("pcre2/src").join(file));
     }
@@ -147,10 +148,10 @@ fn use_pcre2_sys_static() -> Option<bool> {
 fn binding() {
     let lib_dir = PathBuf::from("./target");
 
-    // head file path need to binding
+    // header file path need to binding
     let header_path = lib_dir.join("include/pcre2.h");
-    let header_path_str = header_path.to_str().expect("invalid head path");
-   
+    let header_path_str = header_path.to_str().expect("invalid header path");
+
     let bindings = bindgen::Builder::default()
         // The input header we would like to generate
         // bindings for.
@@ -170,9 +171,7 @@ fn binding() {
         .blocklist_function("^.*_callout_.*")
         .blocklist_type("^.*_callout_.*")
         .clang_arg("-DPCRE2_CODE_UNIT_WIDTH=8")
-        // Finish the builder and generate the bindings.
         .generate()
-        // Unwrap the Result and panic on failure.
         .expect("Unable to generate bindings");
 
     // Write the bindings to the src/bindings.rs file.
