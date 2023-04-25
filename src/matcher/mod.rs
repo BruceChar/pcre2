@@ -3,7 +3,6 @@
 mod pcre2;
 pub use pcre2::*;
 
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Match<'s> {
     subject: &'s [u8],
@@ -44,5 +43,5 @@ impl<'s> Match<'s> {
 }
 
 pub trait Matcher {
-    fn find(&self) ;
+    fn find(&self);
 }

@@ -17,28 +17,27 @@
 mod matcher;
 mod sender;
 
-use matcher::{PCRE2};
+use matcher::PCRE2;
 use sender::{Sender, Udp};
 
 fn main() {
+    // just hard code to run
+    // TODO: cli parser
     let udp = Udp::new("127.0.0.1:7878").unwrap();
 
-    let target = r"a;jhgoqoghqoj0329 u0tyu10hg0h9Y0Y9827342482y(Y0y(G)_)lajf;lqjfgqhgpqjopjqa=)*(^!@#$%^&*())9999999";
+    let subject = r"a;jhgoqoghqoj0329 u0tyu10hg0h9Y0Y9827342482y(Y0y(G)_)lajf;lqjfgqhgpqjopjqa=)*(^!@#$%^&*())9999999";
     // Use Positive Lookbehind (?<=) and Positive Lookahead (?=)
     let pattern = r"(?<=\d{4})[^\d\s]{3,11}(?=\S)";
-    // We use port 0 to let the operating system allocate an available port for us.
 
     let grep = PCRE2::new(pattern).unwrap();
 
-    for m in grep.find_iter(target.as_bytes()) {
+    for m in grep.find_iter(subject.as_bytes()) {
         match m {
-            Ok(s) => {
-                match udp.send(s.as_bytes()) {
-                    Ok(len) => print!("send {:?} bytes: {:?}", len, s.to_string()),
-                    Err(e) => print!("send error: {:?}", e)
-                }
-            }
-            Err(e) => println!("match error: {:?}", e)
+            Ok(s) => match udp.send(s.as_bytes()) {
+                Ok(len) => print!("send {:?} bytes: {:?}", len, s.to_string()),
+                Err(e) => print!("send error: {:?}", e),
+            },
+            Err(e) => println!("match error: {:?}", e),
         }
     }
 }

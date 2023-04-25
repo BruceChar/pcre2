@@ -1,8 +1,8 @@
 use super::Sender;
+use anyhow::{bail, Result};
 use std::net::UdpSocket;
-use anyhow::{Result, bail};
 
-const AUTO_FD: &'static str = "0.0.0.0:0";
+const AUTO_FD: &str = "0.0.0.0:0";
 
 pub struct Udp {
     socket: UdpSocket,
@@ -19,7 +19,6 @@ impl Udp {
 }
 
 impl Sender for Udp {
-
     fn send(&self, buf: &[u8]) -> Result<usize> {
         match self.socket.send(buf) {
             Ok(s) => Ok(s),

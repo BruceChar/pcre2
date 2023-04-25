@@ -14,8 +14,6 @@ mod tests {
 
     #[test]
     fn test_dfa_match() {
-        unsafe {
-
-        }
+        unsafe {}
     }
 }

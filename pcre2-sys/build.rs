@@ -9,7 +9,7 @@ use std::{env, fs};
 use bindgen::CargoCallbacks;
 
 // Files that PCRE2 needs to compile.
-const FILES: &'static [&'static str] = &[
+const FILES: &[&str] = &[
     "pcre2posix.c",
     "pcre2_auto_possess.c",
     "pcre2_compile.c",
@@ -62,7 +62,7 @@ fn main() {
     // make sure our pcre2 submodule has been loaded.
     if has_git() && !Path::new("pcre2/.git").exists() {
         Command::new("git")
-            .args(&["submodule", "update", "--init"])
+            .args(["submodule", "update", "--init"])
             .status()
             .unwrap();
     }

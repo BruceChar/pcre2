@@ -183,7 +183,6 @@ impl MatchData {
     }
 }
 
-
 pub struct Matches<'p, 's> {
     re: &'p PCRE2,
     data: &'p MatchData,
@@ -199,17 +198,14 @@ impl<'r, 's> Iterator for Matches<'r, 's> {
         if self.last_end > self.subject.len() {
             return None;
         }
-        let res = self.re.find_at(
-            self.subject,
-            self.last_end,
-        );
+        let res = self.re.find_at(self.subject, self.last_end);
         let m = match res {
             Err(err) => {
                 if err.to_string().eq("No match items") {
-                    return None
+                    return None;
                 }
-                return Some(Err(err))
-            },
+                return Some(Err(err));
+            }
             Ok(m) => m,
         };
         if m.start() == m.end() {
@@ -271,7 +267,7 @@ impl PCRE2 {
         };
         if rc == PCRE2_ERROR_NOMATCH {
             // no match
-            return Err(anyhow!("No match items"));
+            Err(anyhow!("No match items"))
         } else if rc > 0 {
             // match successfully
             let ovector = self.data.ovector();
@@ -287,7 +283,7 @@ impl PCRE2 {
             // ovector should big enough
             assert!(rc != 0);
             // other error handle
-            return Err(anyhow!("find error"))
+            return Err(anyhow!("find error"));
         }
     }
 
