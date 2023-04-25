@@ -1,5 +1,6 @@
 use super::Sender;
 use std::net::UdpSocket;
+use anyhow::{Result, bail};
 
 const AUTO_FD: &'static str = "0.0.0.0:0";
 
@@ -8,10 +9,10 @@ pub struct Udp {
 }
 
 impl Udp {
-    pub fn new(addr: &str) -> Result<Self, String> {
+    pub fn new(addr: &str) -> Result<Self> {
         let socket = UdpSocket::bind(AUTO_FD).expect("unable to bind");
         if let Err(e) = socket.connect(addr) {
-            return Err(e.to_string());
+            bail!(e);
         };
         Ok(Self { socket })
     }
@@ -19,10 +20,10 @@ impl Udp {
 
 impl Sender for Udp {
 
-    fn send(&self, buf: &[u8]) -> Result<usize, String> {
+    fn send(&self, buf: &[u8]) -> Result<usize> {
         match self.socket.send(buf) {
             Ok(s) => Ok(s),
-            Err(e) => Err(e.to_string()),
+            Err(e) => bail!(e.to_string()),
         }
     }
 }

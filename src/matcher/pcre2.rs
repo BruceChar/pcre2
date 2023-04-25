@@ -14,14 +14,14 @@
 #![allow(dead_code)]
 
 use pcre2_sys::*;
-use std::fmt;
 use std::ops::BitAnd;
-use std::ops::BitXor;
 use std::ptr;
+use std::slice;
 use std::str;
 
 use anyhow::{anyhow, bail, Result};
-use libc::{c_int, size_t};
+
+use super::Match;
 
 pub struct CompileContext(*mut pcre2_compile_context_8);
 
@@ -38,15 +38,20 @@ impl CompileContext {
     }
 }
 
+impl Drop for CompileContext {
+    fn drop(&mut self) {
+        unsafe { pcre2_compile_context_free_8(self.0) }
+    }
+}
+
 /// The following option bits can be passed only to pcre2_compile(). However,
 /// they may affect compilation, JIT compilation, and/or interpretive execution.
 /// The following tags indicate which:
-
 /// C   alters what is compiled by pcre2_compile()
 /// J   alters what is compiled by pcre2_jit_compile()
 /// M   is inspected during pcre2_match() execution
 /// D   is inspected during pcre2_dfa_match() execution
-/// {
+/// pub enum CompileOptions {
 ///     Default = 0x00000000,
 ///     ALLOW_EMPTY_CLASS = 0x00000001,   /* C       */
 ///     ALT_BSUX = 0x00000002,            /* C       */
@@ -85,13 +90,33 @@ fn is_option_valid(option: u32) -> bool {
     option.bitand(OPTION_MASK).eq(&0)
 }
 
+#[derive(Debug)]
 pub struct Pattern {
     code: *mut pcre2_code_8,
 }
 
+impl Default for Pattern {
+    fn default() -> Self {
+        Self {
+            code: ptr::null_mut(),
+        }
+    }
+}
+
+impl Drop for Pattern {
+    fn drop(&mut self) {
+        unsafe { pcre2_code_free_8(self.code) }
+    }
+}
+
 impl Pattern {
+    pub fn new(pattern: &str) -> Result<Self> {
+        // the default fast options
+        Pattern::new_with(pattern, PCRE2_UCP | PCRE2_UTF, CompileContext::new())
+    }
+
     // SAFETY: option is specified
-    pub fn new(pattern: &str, options: u32, mut ctx: CompileContext) -> Result<Self> {
+    pub fn new_with(pattern: &str, options: u32, mut ctx: CompileContext) -> Result<Self> {
         if !is_option_valid(options) {
             bail!("invalid compile option: {}", options);
         }
@@ -111,185 +136,208 @@ impl Pattern {
         }
         Ok(Self { code })
     }
-}
 
-mod ffi {
-    use pcre2_sys::{pcre2_match_8, PCRE2_ERROR_NOMATCH, PCRE2_SIZE, PCRE2_SPTR8};
-
-    pub fn pcre2_match() {
-        unsafe {
-            // let rc = pcre2_match_8(
-            //     code.as_ptr(),
-            //     subject.as_ptr(),
-            //     subject.len(),
-            //     start,
-            //     options,
-            //     self.as_mut_ptr(),
-            //     self.match_context,
-            // );
-            let rc = 0;
-            if rc == PCRE2_ERROR_NOMATCH {
-                // no match
-                todo!()
-            } else if rc > 0 {
-                // match successfully
-                todo!()
-            } else {
-                // since we create match data always with
-                // pcre2_match_data_create_from_pattern, so the
-                // ovector should big enough
-                assert!(rc != 0);
-                // other error handle
-                // Err(Error::matching(rc))
-                todo!()
-            }
-        }
+    pub fn as_ptr(&self) -> *const pcre2_code_8 {
+        self.code
     }
 }
 
-pub struct Regex {
-    code: *mut pcre2_code_8,
-    match_data: *mut pcre2_match_data_8,
-    ovector: *mut size_t,
+pub struct MatchData {
+    data: *mut pcre2_match_data_8,
+    ovector_ptr: *const usize,
+    ovector_cnt: u32,
 }
 
-unsafe impl Send for Regex {}
-
-impl Drop for Regex {
+impl Drop for MatchData {
     fn drop(&mut self) {
         unsafe {
-            // Release memory used for the match
-            pcre2_match_data_free_8(self.match_data);
-            // data and the compiled pattern.
-            pcre2_code_free_8(self.code);
+            pcre2_match_data_free_8(self.data);
         }
     }
 }
 
-pub struct Error {
-    code: c_int,
-    offset: size_t,
+impl MatchData {
+    pub fn new(pattern: &Pattern) -> Self {
+        let data =
+            unsafe { pcre2_match_data_create_from_pattern_8(pattern.as_ptr(), ptr::null_mut()) };
+        assert!(!data.is_null(), "failed to allocate match data block");
+        let ovector_ptr = unsafe { pcre2_get_ovector_pointer_8(data) };
+
+        assert!(!ovector_ptr.is_null(), "null ovector pointer");
+        let ovector_cnt = unsafe { pcre2_get_ovector_count_8(data) };
+        MatchData {
+            data,
+            ovector_ptr,
+            ovector_cnt,
+        }
+    }
+
+    pub fn as_mut_ptr(&self) -> *mut pcre2_match_data_8 {
+        self.data
+    }
+
+    pub fn ovector(&self) -> &[usize] {
+        // SAFETY: Both our ovector pointer and count are derived directly from
+        // the creation of a valid match data block.
+        unsafe { slice::from_raw_parts(self.ovector_ptr, self.ovector_cnt as usize * 2) }
+    }
 }
 
-impl Regex {
-    pub fn new(pattern: &str) -> Result<Regex, Error> {
-        let mut error_code: c_int = 0;
-        let mut error_offset: size_t = 0;
-        // compile the regular expression pattern, and handle any errors that are detected.
-        let code = unsafe {
-            pcre2_compile_8(
-                pattern.as_ptr(),
-                pattern.len(),
-                // PCRE2 can get significantly faster in some cases depending
-                // on the permutation of these options (in particular, dropping
-                // UCP). We should endeavor to have a separate "ASCII compatible"
-                // benchmark.
-                PCRE2_UCP | PCRE2_UTF,
-                &mut error_code,
-                &mut error_offset,
+
+pub struct Matches<'p, 's> {
+    re: &'p PCRE2,
+    data: &'p MatchData,
+    subject: &'s [u8],
+    last_end: usize,
+    last_match: Option<usize>,
+}
+
+impl<'r, 's> Iterator for Matches<'r, 's> {
+    type Item = Result<Match<'s>>;
+
+    fn next(&mut self) -> Option<Result<Match<'s>>> {
+        if self.last_end > self.subject.len() {
+            return None;
+        }
+        let res = self.re.find_at(
+            self.subject,
+            self.last_end,
+        );
+        let m = match res {
+            Err(err) => {
+                if err.to_string().eq("No match items") {
+                    return None
+                }
+                return Some(Err(err))
+            },
+            Ok(m) => m,
+        };
+        if m.start() == m.end() {
+            // This is an empty match. To ensure we make progress, start
+            // the next search at the smallest possible starting position
+            // of the next match following this one.
+            self.last_end = m.end() + 1;
+            // Don't accept empty matches immediately following a match.
+            // Just move on to the next match.
+            if Some(m.end()) == self.last_match {
+                return self.next();
+            }
+        } else {
+            self.last_end = m.end();
+        }
+        self.last_match = Some(m.end());
+        Some(Ok(m))
+    }
+}
+
+pub struct PCRE2 {
+    /// compile options
+    options: u32,
+    /// origin pattern string
+    origin: String,
+    /// compiled pcre2 pattern
+    pattern: Pattern,
+    /// match data used by pcre2 during matching
+    data: MatchData,
+}
+
+impl PCRE2 {
+    pub fn new(pattern: &str) -> Result<Self> {
+        PCRE2Builder::new().build(pattern)
+    }
+
+    /// default NO_UTF_CHECK match mod
+    /// and just do one match, match all see [`find_iter`]
+    pub fn find_at<'s>(&self, subject: &'s [u8], start: usize) -> Result<Match<'s>> {
+        self.find_at_with_options(subject, start, PCRE2_NO_UTF_CHECK)
+    }
+
+    pub fn find_at_with_options<'s>(
+        &self,
+        subject: &'s [u8],
+        start: usize,
+        options: u32,
+    ) -> Result<Match<'s>> {
+        let rc = unsafe {
+            pcre2_match_8(
+                self.pattern.as_ptr(),
+                subject.as_ptr(),
+                subject.len(),
+                start,
+                options,
+                self.data.as_mut_ptr(),
                 ptr::null_mut(),
             )
         };
-        if code.is_null() {
-            return Err(Error {
-                code: error_code,
-                offset: error_offset,
-            });
+        if rc == PCRE2_ERROR_NOMATCH {
+            // no match
+            return Err(anyhow!("No match items"));
+        } else if rc > 0 {
+            // match successfully
+            let ovector = self.data.ovector();
+            let (start, end) = (ovector[0], ovector[1]);
+            Ok(Match {
+                subject: &subject[start..end],
+                start,
+                end,
+            })
+        } else {
+            // since we create match data always with
+            // pcre2_match_data_create_from_pattern, so the
+            // ovector should big enough
+            assert!(rc != 0);
+            // other error handle
+            return Err(anyhow!("find error"))
         }
-        // let err = unsafe { pcre2_jit_compile_8(code, PCRE2_JIT_COMPLETE) };
-        // if err < 0 {
-        //     panic!("pcre2_jit_compile_8 failed with error: {:?}", err);
-        // }
-        // do a pattern match against the subject string. This does just ONE match.
-        let match_data = unsafe { pcre2_match_data_create_from_pattern_8(code, ptr::null_mut()) };
-        if match_data.is_null() {
-            panic!("could not allocate match_data");
+    }
+
+    pub fn find_iter<'p, 's>(&'p self, subject: &'s [u8]) -> Matches<'p, 's> {
+        Matches {
+            re: self,
+            data: &self.data,
+            subject,
+            last_end: 0,
+            last_match: None,
         }
-        // Match succeeded. Get a pointer to the output vector, where string offsets are stored.
-        let ovector = unsafe { pcre2_get_ovector_pointer_8(match_data) };
-        if ovector.is_null() {
-            panic!("could not get ovector");
-        }
-        Ok(Regex {
-            code,
-            match_data,
-            ovector,
+    }
+
+    pub fn is_match(&self, subject: &[u8]) -> bool {
+        self.find_at(subject, 0).is_ok()
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct PCRE2Builder {
+    options: u32,
+}
+
+impl PCRE2Builder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn build(self, pattern: &str) -> Result<PCRE2> {
+        // create pattern with compile options, default: 0x00000000
+        let origin = pattern.to_string();
+        let pattern = Pattern::new_with(pattern, self.options, CompileContext::new())?;
+        let data = MatchData::new(&pattern);
+        Ok(PCRE2 {
+            options: self.options,
+            origin,
+            pattern,
+            data,
         })
     }
 
-    pub fn is_match(&self, text: &str) -> bool {
-        self.find_at(text, 0).is_some()
+    // don't check the option validity here
+    pub fn options(mut self, options: u32) -> Self {
+        self.options = options;
+        self
     }
 
-    pub fn find_iter<'r, 't>(&'r self, text: &'t str) -> FindMatches<'r, 't> {
-        FindMatches {
-            re: self,
-            text,
-            last_match_end: 0,
-        }
-    }
-
-    fn find_at(&self, text: &str, start: usize) -> Option<(usize, usize)> {
-        // The man pages for PCRE2 say that pcre2_jit_match is the fastest
-        // way to execute a JIT match because it skips sanity checks. We also
-        // explicitly disable the UTF-8 validity check, but it's probably not
-        // necessary.
-        let err = unsafe {
-            pcre2_match_8(
-                self.code,          // the compiled pattern
-                text.as_ptr(),      // the subject string
-                text.len(),         // the length of the subject
-                start,              // the start offset in the subject
-                PCRE2_NO_UTF_CHECK, // options
-                self.match_data,    // block for storing the result
-                ptr::null_mut(),    // use the default match context
-            )
-        };
-        if err == PCRE2_ERROR_NOMATCH {
-            None
-        } else if err < 0 {
-            panic!("unknown error code: {err:?}");
-        } else {
-            Some(unsafe { (*self.ovector, *self.ovector.offset(1)) })
-        }
-    }
-}
-
-pub struct FindMatches<'r, 't> {
-    re: &'r Regex,
-    text: &'t str,
-    last_match_end: usize,
-}
-
-impl<'r, 't> Iterator for FindMatches<'r, 't> {
-    type Item = (usize, usize);
-
-    fn next(&mut self) -> Option<(usize, usize)> {
-        match self.re.find_at(self.text, self.last_match_end) {
-            None => None,
-            Some((s, e)) => {
-                self.last_match_end = e;
-                Some((s, e))
-            }
-        }
-    }
-}
-
-impl fmt::Debug for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        const BUF_LEN: size_t = 256;
-        let mut buf = [0; BUF_LEN];
-        let len = unsafe { pcre2_get_error_message_8(self.code, buf.as_mut_ptr(), BUF_LEN) };
-        if len < 0 {
-            write!(
-                f,
-                "Unknown PCRE error. (code: {:?}, offset: {:?})",
-                self.code, self.offset
-            )
-        } else {
-            let msg = str::from_utf8(&buf[..len as usize]).unwrap();
-            write!(f, "error at {:?}: {}", self.offset, msg)
-        }
+    pub fn add_option(mut self, option: u32) -> Self {
+        self.options |= option;
+        self
     }
 }
 
@@ -297,32 +345,25 @@ impl fmt::Debug for Error {
 mod tests {
     use super::*;
 
-    mod context {
-        use crate::matcher::CompileContext;
-
-        #[test]
-        fn test_context() {
-            let ctx = CompileContext::new();
-            assert!(!ctx.0.is_null());
-        }
-    }
-
     #[test]
-    fn test_option_valid() {
-        let re = is_option_valid(0x20000000);
-        assert!(re);
-        let re = is_option_valid(0x10000000);
-        assert!(!re);
-    }
-
-    #[test]
-    fn test_compile_option() {
+    fn test_compile_context_new() {
         let ctx = CompileContext::new();
-        let pattern = Pattern::new(r"*", 0x10000000, ctx);
+        assert!(!ctx.0.is_null());
+    }
+
+    #[test]
+    fn test_is_option_valid() {
+        let valid = is_option_valid(0x20000000);
+        assert!(valid);
+        let valid = is_option_valid(0x10000000);
+        assert!(!valid);
+    }
+
+    #[test]
+    fn test_pattern_new() {
+        let pattern = Pattern::new(r"*");
         assert!(pattern.is_err());
-        let ctx = CompileContext::new();
-        let pattern = Pattern::new(r"(?<=\d{4})[^\d\s]{3,11}(?=\S)", 0x20000000, ctx);
+        let pattern = Pattern::new(r"(?<=\d{4})[^\d\s]{3,11}(?=\S)");
         assert!(pattern.is_ok());
     }
-
 }

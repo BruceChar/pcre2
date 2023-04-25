@@ -16,8 +16,9 @@
 //!
 mod matcher;
 mod sender;
+
+use matcher::{PCRE2};
 use sender::{Sender, Udp};
-use matcher::Regex;
 
 fn main() {
     let udp = Udp::new("127.0.0.1:7878").unwrap();
@@ -27,17 +28,17 @@ fn main() {
     let pattern = r"(?<=\d{4})[^\d\s]{3,11}(?=\S)";
     // We use port 0 to let the operating system allocate an available port for us.
 
-    for mat in Regex::new(pattern).unwrap().find_iter(target) {
-        let matched = get_matched(target, mat.0, mat.1);
-        println!("Matched: {matched}");
-        // let len = udp.se
-        //     .send_to(matched.as_bytes(), &(cli.addr.to_string(), cli.port))
-        //     .expect("Could not send data to server");
-        // println!("Send len: {len}");
-        udp.send(matched.as_bytes()).unwrap();
-    }
-}
+    let grep = PCRE2::new(pattern).unwrap();
 
-fn get_matched(target: &str, begin: usize, end: usize) -> String {
-    String::from(&target[begin..end])
+    for m in grep.find_iter(target.as_bytes()) {
+        match m {
+            Ok(s) => {
+                match udp.send(s.as_bytes()) {
+                    Ok(len) => print!("send {:?} bytes: {:?}", len, s.to_string()),
+                    Err(e) => print!("send error: {:?}", e)
+                }
+            }
+            Err(e) => println!("match error: {:?}", e)
+        }
+    }
 }

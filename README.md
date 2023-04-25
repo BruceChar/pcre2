@@ -1,4 +1,14 @@
-A `PCRE2` library in rust with FFI binding.
+A simple `PCRE2` library usecase in rust with FFI binding.
+
+## Run
+Ooen a terminal run:
+```bash
+./receiver.sh
+```
+then
+```
+cargo run
+```
 
 
 ## Issue
